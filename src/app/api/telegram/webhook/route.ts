@@ -4,7 +4,10 @@ import { sendTelegramMessage } from '@/lib/telegram';
 
 const installmentKeyboard = {
   inline_keyboard: [
-    [1,2,3,4,5,6].map(n => ({ text: n === 1 ? 'À vista' : `${n}x`, callback_data: `installments:${n}` })),
+    [1, 2, 3, 4, 5, 6].map((n) => ({
+      text: n === 1 ? 'À vista' : `${n}x`,
+      callback_data: `installments:${n}`,
+    })),
     [{ text: '➕ Mais', callback_data: 'installments_more' }],
   ],
 };
@@ -43,48 +46,42 @@ async function setState(chatId: number, action: string, purchaseId?: string | nu
 }
 
 async function takeState(chatId: number) {
-  const { data, error } = await supabaseAdmin().rpc('cc_take_telegram_state', { p_chat_id: chatId });
+  const { data, error } = await supabaseAdmin().rpc('cc_take_telegram_state', {
+    p_chat_id: chatId,
+  });
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
 }
 
+async function answerCallback(callbackQueryId?: string) {
+  if (!callbackQueryId) return;
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ callback_query_id: callbackQueryId }),
+  });
+}
+
 async function linkProfile(chatId: number, profileName: string) {
-  if (!['Rodrigo', 'Mylena'].includes(profileName)) throw new Error('Perfil inválido');
-  const db = supabaseAdmin().schema('cartao_credito');
-
-  const { data: existing, error: readError } = await db
-    .from('users')
-    .select('id,name,telegram_chat_id')
-    .eq('name', profileName)
-    .maybeSingle();
-  if (readError) throw readError;
-  if (!existing) throw new Error('Perfil não encontrado');
-
-  if (existing.telegram_chat_id && Number(existing.telegram_chat_id) !== chatId) {
-    throw new Error('Este perfil já está vinculado a outro Telegram');
-  }
-
-  const { error: conflictError } = await db
-    .from('users')
-    .update({ telegram_chat_id: null })
-    .eq('telegram_chat_id', chatId)
-    .neq('id', existing.id);
-  if (conflictError) throw conflictError;
-
-  const { error: updateError } = await db
-    .from('users')
-    .update({ telegram_chat_id: chatId })
-    .eq('id', existing.id);
-  if (updateError) throw updateError;
-
-  return existing;
+  const { data, error } = await supabaseAdmin().rpc('cc_link_telegram_profile', {
+    p_chat_id: chatId,
+    p_profile_name: profileName,
+  });
+  if (error) throw error;
+  const profile = Array.isArray(data) ? data[0] : data;
+  if (!profile) throw new Error('Perfil não encontrado');
+  return profile;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
     const received = req.headers.get('x-telegram-bot-api-secret-token');
-    if (!expected || received !== expected) return NextResponse.json({ ok: false }, { status: 401 });
+    if (!expected || received !== expected) {
+      return NextResponse.json({ ok: false }, { status: 401 });
+    }
 
     const update = await req.json();
     const message = update?.message;
@@ -99,6 +96,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (callback?.data) {
+      await answerCallback(callback.id);
       const data = String(callback.data);
       const [action, value] = data.split(':');
 
@@ -115,7 +113,10 @@ export async function POST(req: NextRequest) {
           await setState(chatId, 'merchant_edit', purchaseId);
           await sendTelegramMessage(chatId, 'Digite o nome correto do estabelecimento:');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', { p_purchase_id: purchaseId, p_display_name: null });
+          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', {
+            p_purchase_id: purchaseId,
+            p_display_name: null,
+          });
           if (error) throw error;
           await setState(chatId, `installments:${purchaseId}`, purchaseId);
           await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
@@ -128,7 +129,10 @@ export async function POST(req: NextRequest) {
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
         const count = Number(value);
-        const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
+        const { error } = await supabaseAdmin().rpc('cc_set_installments', {
+          p_purchase_id: purchaseId,
+          p_count: count,
+        });
         if (error) throw error;
         await setState(chatId, `category:${purchaseId}`, purchaseId);
         await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
@@ -146,7 +150,10 @@ export async function POST(req: NextRequest) {
         const state = await takeState(chatId);
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
-        const { error } = await supabaseAdmin().rpc('cc_set_category', { p_purchase_id: purchaseId, p_category: value });
+        const { error } = await supabaseAdmin().rpc('cc_set_category', {
+          p_purchase_id: purchaseId,
+          p_category: value,
+        });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
         return NextResponse.json({ ok: true });
@@ -166,7 +173,10 @@ export async function POST(req: NextRequest) {
       const purchaseId = state.purchase_id;
 
       if (state.action === 'merchant_edit' && purchaseId) {
-        const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', { p_purchase_id: purchaseId, p_display_name: String(message.text).trim() });
+        const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', {
+          p_purchase_id: purchaseId,
+          p_display_name: String(message.text).trim(),
+        });
         if (error) throw error;
         await setState(chatId, `installments:${purchaseId}`, purchaseId);
         await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
@@ -176,13 +186,19 @@ export async function POST(req: NextRequest) {
           await setState(chatId, 'installments_more', purchaseId);
           await sendTelegramMessage(chatId, 'Informe um número inteiro entre 2 e 48.');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
+          const { error } = await supabaseAdmin().rpc('cc_set_installments', {
+            p_purchase_id: purchaseId,
+            p_count: count,
+          });
           if (error) throw error;
           await setState(chatId, `category:${purchaseId}`, purchaseId);
           await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
         }
       } else if (state.action === 'category_more' && purchaseId) {
-        const { error } = await supabaseAdmin().rpc('cc_set_category', { p_purchase_id: purchaseId, p_category: String(message.text).trim().toLowerCase() });
+        const { error } = await supabaseAdmin().rpc('cc_set_category', {
+          p_purchase_id: purchaseId,
+          p_category: String(message.text).trim().toLowerCase(),
+        });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
       }
@@ -191,6 +207,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'internal error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'internal error' },
+      { status: 500 },
+    );
   }
 }
