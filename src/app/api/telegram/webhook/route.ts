@@ -36,6 +36,32 @@ const profileKeyboard = {
   ]],
 };
 
+const adminMenuKeyboard = {
+  inline_keyboard: [
+    [
+      { text: '💳 Gastos Rodrigo', callback_data: 'menu:expenses_me' },
+      { text: '💳 Gastos Mylena', callback_data: 'menu:expenses_mylena' },
+    ],
+    [{ text: '📊 Gasto Geral', callback_data: 'menu:general' }],
+    [{ text: '📅 Próximas Faturas', callback_data: 'menu:upcoming' }],
+    [
+      { text: '🧾 Compras', callback_data: 'menu:purchases' },
+      { text: '⚠️ Pendências', callback_data: 'menu:pending' },
+    ],
+  ],
+};
+
+const memberMenuKeyboard = {
+  inline_keyboard: [
+    [{ text: '💳 Meus Gastos', callback_data: 'menu:expenses_me' }],
+    [{ text: '📅 Minhas Próximas Parcelas', callback_data: 'menu:upcoming' }],
+    [
+      { text: '🧾 Minhas Compras', callback_data: 'menu:purchases' },
+      { text: '⚠️ Minhas Pendências', callback_data: 'menu:pending' },
+    ],
+  ],
+};
+
 async function setState(chatId: number, action: string, purchaseId?: string | null) {
   const { error } = await supabaseAdmin().rpc('cc_set_telegram_state', {
     p_chat_id: chatId,
@@ -75,6 +101,53 @@ async function linkProfile(chatId: number, profileName: string) {
   return profile;
 }
 
+async function getReport(chatId: number, view: string) {
+  const { data, error } = await supabaseAdmin().rpc('cc_bot_report', {
+    p_chat_id: chatId,
+    p_view: view,
+  });
+  if (error) throw error;
+  return data as any;
+}
+
+function brl(value: unknown) {
+  return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function formatReport(report: any) {
+  if (!report) return 'Sem dados.';
+  const lines: string[] = [String(report.title || 'Relatório')];
+  if (report.total !== undefined) lines.push(`Total: ${brl(report.total)}`);
+  if (report.count !== undefined) lines.push(`Quantidade: ${report.count}`);
+
+  if (Array.isArray(report.items) && report.items.length) {
+    lines.push('');
+    for (const item of report.items.slice(0, 10)) {
+      lines.push(`• ${item.date || ''} ${item.merchant || ''} — ${brl(item.amount)}`.trim());
+    }
+  }
+
+  if (Array.isArray(report.months) && report.months.length) {
+    lines.push('');
+    for (const item of report.months) {
+      lines.push(`• ${item.month}: ${brl(item.total)}`);
+    }
+  }
+
+  if ((!report.items || report.items.length === 0) && (!report.months || report.months.length === 0) && report.total === undefined) {
+    lines.push('Nenhum registro encontrado.');
+  }
+
+  return lines.join('\n');
+}
+
+async function showMenu(chatId: number) {
+  const profile = await getReport(chatId, 'menu');
+  const isAdmin = profile?.role === 'admin';
+  const text = `Olá, ${profile?.name || ''}. Escolha uma opção:`;
+  await sendTelegramMessage(chatId, text, isAdmin ? adminMenuKeyboard : memberMenuKeyboard);
+}
+
 export async function POST(req: NextRequest) {
   try {
     const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -89,9 +162,19 @@ export async function POST(req: NextRequest) {
     const chatId = Number(message?.chat?.id ?? callback?.message?.chat?.id);
     if (!Number.isFinite(chatId)) return NextResponse.json({ ok: true });
 
-    if (message?.text === '/start' || String(message?.text || '').startsWith('/start ')) {
-      await setState(chatId, 'pending_start', null);
-      await sendTelegramMessage(chatId, 'Quem está usando este Telegram?', profileKeyboard);
+    const text = String(message?.text || '');
+    if (text === '/start' || text.startsWith('/start ')) {
+      try {
+        await showMenu(chatId);
+      } catch {
+        await setState(chatId, 'pending_start', null);
+        await sendTelegramMessage(chatId, 'Quem está usando este Telegram?', profileKeyboard);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (text === '/menu' || text.toLowerCase() === 'menu') {
+      await showMenu(chatId);
       return NextResponse.json({ ok: true });
     }
 
@@ -104,6 +187,18 @@ export async function POST(req: NextRequest) {
         const profile = await linkProfile(chatId, value);
         await takeState(chatId);
         await sendTelegramMessage(chatId, `✅ Telegram vinculado ao perfil ${profile.name}.`);
+        await showMenu(chatId);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === 'menu' && value) {
+        const report = await getReport(chatId, value);
+        await sendTelegramMessage(chatId, formatReport(report), value === 'expenses_me' || value === 'expenses_mylena' || value === 'general' || value === 'upcoming' || value === 'purchases' || value === 'pending' ? { inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]] } : undefined);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === 'menu_back') {
+        await showMenu(chatId);
         return NextResponse.json({ ok: true });
       }
 
@@ -156,6 +251,7 @@ export async function POST(req: NextRequest) {
         });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
+        await showMenu(chatId);
         return NextResponse.json({ ok: true });
       }
 
@@ -201,6 +297,7 @@ export async function POST(req: NextRequest) {
         });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
+        await showMenu(chatId);
       }
     }
 
