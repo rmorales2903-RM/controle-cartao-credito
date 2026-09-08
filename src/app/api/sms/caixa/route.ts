@@ -17,7 +17,9 @@ export async function POST(req: NextRequest) {
     }
 
     const raw = String(body?.raw ?? body?.message ?? '');
-    const secret = req.headers.get('x-ingest-secret');
+    const secret = String(
+      req.headers.get('x-ingest-secret') ?? body?.ingestSecret ?? body?.secret ?? '',
+    );
     const authOk = Boolean(process.env.SMS_INGEST_SECRET) && secret === process.env.SMS_INGEST_SECRET;
 
     const { data: loggedId } = await supabase.rpc('cc_log_sms_ingest_debug', {
