@@ -20,30 +20,21 @@ export async function POST(req: NextRequest) {
     const secret = req.headers.get('x-ingest-secret');
     const authOk = Boolean(process.env.SMS_INGEST_SECRET) && secret === process.env.SMS_INGEST_SECRET;
 
-    const { data: debugRow } = await supabase
-      .schema('cartao_credito')
-      .from('sms_ingest_debug')
-      .insert({
-        auth_ok: authOk,
-        raw_message: raw || null,
-        error_message: null,
-      })
-      .select('id')
-      .single();
-
-    debugId = debugRow?.id ?? null;
+    const { data: loggedId } = await supabase.rpc('cc_log_sms_ingest_debug', {
+      p_auth_ok: authOk,
+      p_raw_message: raw || null,
+      p_error_message: null,
+    });
+    debugId = typeof loggedId === 'number' ? loggedId : Number(loggedId || 0) || null;
 
     const setDebugError = async (message: string) => {
       if (!debugId) return;
-      await supabase
-        .schema('cartao_credito')
-        .from('sms_ingest_debug')
-        .update({ error_message: message })
-        .eq('id', debugId);
+      await supabase.rpc('cc_update_sms_ingest_debug', {
+        p_id: debugId,
+        p_error_message: message,
+      });
     };
 
-    // During iPhone Shortcut setup we return HTTP 200 even for validation errors,
-    // so Shortcuts does not hide the useful diagnostic behind "automation failed".
     if (!authOk) {
       await setDebugError('unauthorized');
       return NextResponse.json({ ok: false, stage: 'auth', error: 'unauthorized' });
@@ -88,7 +79,7 @@ export async function POST(req: NextRequest) {
             { text: `✅ ${suggested}`, callback_data: `merchant_ok:${row.purchase_id}` },
             { text: '✏️ Corrigir nome', callback_data: `merchant_edit:${row.purchase_id}` },
           ]],
-        }
+        },
       );
     }
 
@@ -96,11 +87,10 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const message = e instanceof Error ? e.message : 'internal error';
     if (debugId) {
-      await supabase
-        .schema('cartao_credito')
-        .from('sms_ingest_debug')
-        .update({ error_message: message })
-        .eq('id', debugId);
+      await supabase.rpc('cc_update_sms_ingest_debug', {
+        p_id: debugId,
+        p_error_message: message,
+      });
     }
     return NextResponse.json({ ok: false, stage: 'server', error: message });
   }
