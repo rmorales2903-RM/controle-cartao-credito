@@ -26,6 +26,13 @@ const categoryKeyboard = {
   ],
 };
 
+const profileKeyboard = {
+  inline_keyboard: [[
+    { text: 'Rodrigo', callback_data: 'link_profile:Rodrigo' },
+    { text: 'Mylena', callback_data: 'link_profile:Mylena' },
+  ]],
+};
+
 async function setState(chatId: number, action: string, purchaseId?: string | null) {
   const { error } = await supabaseAdmin().rpc('cc_set_telegram_state', {
     p_chat_id: chatId,
@@ -39,6 +46,38 @@ async function takeState(chatId: number) {
   const { data, error } = await supabaseAdmin().rpc('cc_take_telegram_state', { p_chat_id: chatId });
   if (error) throw error;
   return Array.isArray(data) ? data[0] : data;
+}
+
+async function linkProfile(chatId: number, profileName: string) {
+  if (!['Rodrigo', 'Mylena'].includes(profileName)) throw new Error('Perfil inválido');
+  const db = supabaseAdmin().schema('cartao_credito');
+
+  const { data: existing, error: readError } = await db
+    .from('users')
+    .select('id,name,telegram_chat_id')
+    .eq('name', profileName)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (!existing) throw new Error('Perfil não encontrado');
+
+  if (existing.telegram_chat_id && Number(existing.telegram_chat_id) !== chatId) {
+    throw new Error('Este perfil já está vinculado a outro Telegram');
+  }
+
+  const { error: conflictError } = await db
+    .from('users')
+    .update({ telegram_chat_id: null })
+    .eq('telegram_chat_id', chatId)
+    .neq('id', existing.id);
+  if (conflictError) throw conflictError;
+
+  const { error: updateError } = await db
+    .from('users')
+    .update({ telegram_chat_id: chatId })
+    .eq('id', existing.id);
+  if (updateError) throw updateError;
+
+  return existing;
 }
 
 export async function POST(req: NextRequest) {
@@ -55,13 +94,20 @@ export async function POST(req: NextRequest) {
 
     if (message?.text === '/start' || String(message?.text || '').startsWith('/start ')) {
       await setState(chatId, 'pending_start', null);
-      await sendTelegramMessage(chatId, 'Cadastro recebido. Seu Telegram ainda precisa ser vinculado ao perfil correto.');
+      await sendTelegramMessage(chatId, 'Quem está usando este Telegram?', profileKeyboard);
       return NextResponse.json({ ok: true });
     }
 
     if (callback?.data) {
       const data = String(callback.data);
       const [action, value] = data.split(':');
+
+      if (action === 'link_profile' && value) {
+        const profile = await linkProfile(chatId, value);
+        await takeState(chatId);
+        await sendTelegramMessage(chatId, `✅ Telegram vinculado ao perfil ${profile.name}.`);
+        return NextResponse.json({ ok: true });
+      }
 
       if (action === 'merchant_ok' || action === 'merchant_edit') {
         const purchaseId = value;
