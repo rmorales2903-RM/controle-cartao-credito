@@ -5,19 +5,65 @@ import { supabaseAdmin } from '@/lib/supabase-admin';
 import { sendTelegramMessage } from '@/lib/telegram';
 
 export async function POST(req: NextRequest) {
+  const supabase = supabaseAdmin();
+  let debugId: number | null = null;
+
   try {
-    const secret = req.headers.get('x-ingest-secret');
-    if (!process.env.SMS_INGEST_SECRET || secret !== process.env.SMS_INGEST_SECRET) {
-      return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
+    let body: any = null;
+    try {
+      body = await req.json();
+    } catch {
+      body = null;
     }
 
-    const body = await req.json();
     const raw = String(body?.raw ?? body?.message ?? '');
-    if (!raw) return NextResponse.json({ ok: false, error: 'missing raw message' }, { status: 400 });
+    const secret = req.headers.get('x-ingest-secret');
+    const authOk = Boolean(process.env.SMS_INGEST_SECRET) && secret === process.env.SMS_INGEST_SECRET;
 
-    const parsed = parseCaixaSms(raw);
+    const { data: debugRow } = await supabase
+      .schema('cartao_credito')
+      .from('sms_ingest_debug')
+      .insert({
+        auth_ok: authOk,
+        raw_message: raw || null,
+        error_message: null,
+      })
+      .select('id')
+      .single();
+
+    debugId = debugRow?.id ?? null;
+
+    const setDebugError = async (message: string) => {
+      if (!debugId) return;
+      await supabase
+        .schema('cartao_credito')
+        .from('sms_ingest_debug')
+        .update({ error_message: message })
+        .eq('id', debugId);
+    };
+
+    // During iPhone Shortcut setup we return HTTP 200 even for validation errors,
+    // so Shortcuts does not hide the useful diagnostic behind "automation failed".
+    if (!authOk) {
+      await setDebugError('unauthorized');
+      return NextResponse.json({ ok: false, stage: 'auth', error: 'unauthorized' });
+    }
+
+    if (!raw) {
+      await setDebugError('missing raw message');
+      return NextResponse.json({ ok: false, stage: 'body', error: 'missing raw message' });
+    }
+
+    let parsed;
+    try {
+      parsed = parseCaixaSms(raw);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'SMS CAIXA não reconhecido';
+      await setDebugError(message);
+      return NextResponse.json({ ok: false, stage: 'parser', error: message });
+    }
+
     const invoiceMonth = invoiceMonthFor(parsed.purchasedAt, 5);
-    const supabase = supabaseAdmin();
 
     const { data, error } = await supabase.rpc('cc_ingest_purchase', {
       p_last4: parsed.last4,
@@ -48,6 +94,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, duplicate: Boolean(row.is_duplicate), purchaseId: row.purchase_id });
   } catch (e) {
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'internal error' }, { status: 500 });
+    const message = e instanceof Error ? e.message : 'internal error';
+    if (debugId) {
+      await supabase
+        .schema('cartao_credito')
+        .from('sms_ingest_debug')
+        .update({ error_message: message })
+        .eq('id', debugId);
+    }
+    return NextResponse.json({ ok: false, stage: 'server', error: message });
   }
 }
