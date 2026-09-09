@@ -71,18 +71,43 @@ export async function POST(req: NextRequest) {
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) throw new Error('No ingest response');
 
-    if (!row.is_duplicate && row.telegram_chat_id) {
+    if (!row.is_duplicate) {
+      // Regra de notificacao:
+      // - Rodrigo (admin) recebe todas as compras.
+      // - O titular do cartao recebe as proprias compras.
+      // Assim, compras de Rodrigo ficam somente com Rodrigo; compras de Mylena chegam aos dois.
+      const recipients = new Set<number>();
+      const ownerChatId = Number(row.telegram_chat_id || 0);
+      if (ownerChatId) recipients.add(ownerChatId);
+
+      const { data: adminUser, error: adminError } = await supabase
+        .schema('cartao_credito')
+        .from('users')
+        .select('telegram_chat_id')
+        .eq('role', 'admin')
+        .not('telegram_chat_id', 'is', null)
+        .limit(1)
+        .maybeSingle();
+
+      if (adminError) throw adminError;
+      const adminChatId = Number(adminUser?.telegram_chat_id || 0);
+      if (adminChatId) recipients.add(adminChatId);
+
       const suggested = row.merchant_display || parsed.merchantOriginal;
-      await sendTelegramMessage(
-        row.telegram_chat_id,
-        `Compra de R$ ${parsed.amount.toFixed(2).replace('.', ',')}\nNome recebido: ${parsed.merchantOriginal}\n\nQual nome deve aparecer no relatório?`,
-        {
-          inline_keyboard: [[
-            { text: `✅ ${suggested}`, callback_data: `merchant_ok:${row.purchase_id}` },
-            { text: '✏️ Corrigir nome', callback_data: `merchant_edit:${row.purchase_id}` },
-          ]],
-        },
-      );
+      const message =
+        `Compra de R$ ${parsed.amount.toFixed(2).replace('.', ',')}\n` +
+        `Nome recebido: ${parsed.merchantOriginal}\n\n` +
+        'Qual nome deve aparecer no relatório?';
+      const keyboard = {
+        inline_keyboard: [[
+          { text: `✅ ${suggested}`, callback_data: `merchant_ok:${row.purchase_id}` },
+          { text: '✏️ Corrigir nome', callback_data: `merchant_edit:${row.purchase_id}` },
+        ]],
+      };
+
+      for (const chatId of recipients) {
+        await sendTelegramMessage(chatId, message, keyboard);
+      }
     }
 
     return NextResponse.json({ ok: true, duplicate: Boolean(row.is_duplicate), purchaseId: row.purchase_id });
