@@ -134,28 +134,33 @@ function monthName(value: unknown) {
 }
 
 function installmentLabel(item: any) {
-  const count = Number(item?.installment_count || 1);
+  const count = Number(item?.installment_count || item?.installments || 1);
   const number = Number(item?.installment_number || 1);
   return count <= 1 ? 'à vista' : `parcela ${number}/${count}`;
 }
 
-function purchaseLabel(item: any) {
-  const merchant = item?.merchant || 'Compra';
-  const description = String(item?.description || '').trim();
-  return description ? `${merchant} — ${description}` : merchant;
-}
-
 function shortDate(value: unknown) {
   const text = String(value || '').trim();
-  const match = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  return match ? `${match[1]}/${match[2]}/${match[3].slice(2)}` : text;
+  const full = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (full) return `${full[1]}/${full[2]}/${full[3].slice(2)}`;
+  return text;
+}
+
+function appendPurchaseBlock(lines: string[], item: any, showInstallment = false) {
+  const date = shortDate(item?.date) || '--/--/--';
+  const merchant = String(item?.merchant || 'Estabelecimento não informado').trim();
+  const description = String(item?.description || '').trim() || 'O que comprou: não informado';
+  const installment = showInstallment ? ` · ${installmentLabel(item)}` : '';
+
+  lines.push(`${date} - ${brl(item?.amount)}${installment}`);
+  lines.push(merchant);
+  lines.push(description);
+  lines.push('');
 }
 
 function appendInvoiceItems(lines: string[], items: any[]) {
   if (!Array.isArray(items) || !items.length) return;
-  for (const item of items.slice(0, 12)) {
-    lines.push(`• ${purchaseLabel(item)} — ${brl(item.amount)} — ${installmentLabel(item)}`);
-  }
+  for (const item of items.slice(0, 12)) appendPurchaseBlock(lines, item, true);
 }
 
 function formatReport(report: any) {
@@ -173,14 +178,14 @@ function formatReport(report: any) {
       lines.push(`🟢 Fatura de ${currentName} — em aberto`);
       lines.push(brl(report.current_total));
     }
+    appendInvoiceItems(lines, report.current_items);
 
     lines.push('');
     lines.push(`🟢 Compras para ${nextName} — em aberto`);
     lines.push(brl(report.next_total));
     appendInvoiceItems(lines, report.next_items);
-    lines.push('');
     lines.push(`Fechamento: dia ${report.closing_day || 5}`);
-    return lines.join('\n');
+    return lines.join('\n').trim();
   }
 
   if (report.report_type === 'upcoming_invoices') {
@@ -194,6 +199,7 @@ function formatReport(report: any) {
       lines.push(`🟢 Fatura de ${currentName} — em aberto`);
       lines.push(brl(report.current_total));
     }
+    appendInvoiceItems(lines, report.current_items);
 
     if (Array.isArray(report.months) && report.months.length) {
       const [first, ...rest] = report.months;
@@ -203,7 +209,6 @@ function formatReport(report: any) {
       appendInvoiceItems(lines, first.items);
 
       if (rest.length) {
-        lines.push('');
         lines.push('📅 Próximos meses');
         for (const item of rest) {
           lines.push('');
@@ -216,9 +221,8 @@ function formatReport(report: any) {
       lines.push('Nenhuma compra futura registrada.');
     }
 
-    lines.push('');
     lines.push(`Fechamento: dia ${report.closing_day || 5}`);
-    return lines.join('\n');
+    return lines.join('\n').trim();
   }
 
   const lines: string[] = [String(report.title || 'Relatório')];
@@ -227,13 +231,7 @@ function formatReport(report: any) {
 
   if (Array.isArray(report.items) && report.items.length) {
     lines.push('');
-    for (const item of report.items.slice(0, 10)) {
-      const extra: string[] = [];
-      if (item.installments) extra.push(item.installments === 1 ? 'à vista' : `${item.installments}x`);
-      if (item.invoice_month) extra.push(`fatura ${item.invoice_month}`);
-      const suffix = extra.length ? ` (${extra.join(' · ')})` : '';
-      lines.push(`• ${item.date || ''} ${purchaseLabel(item)} — ${brl(item.amount)}${suffix}`.trim());
-    }
+    for (const item of report.items.slice(0, 10)) appendPurchaseBlock(lines, item, Boolean(item.installments));
   }
 
   if (Array.isArray(report.months) && report.months.length) {
@@ -245,7 +243,7 @@ function formatReport(report: any) {
     lines.push('Nenhum registro encontrado.');
   }
 
-  return lines.join('\n');
+  return lines.join('\n').trim();
 }
 
 async function showMenu(chatId: number) {
@@ -268,11 +266,7 @@ async function showPurchases(chatId: number) {
   const keyboard: any[] = [];
 
   for (const item of items) {
-    const description = String(item.description || '').trim();
-    lines.push(`${shortDate(item.date)} - ${brl(item.amount)}`);
-    lines.push(String(item.merchant || 'Estabelecimento não informado'));
-    lines.push(description || 'O que comprou: não informado');
-    lines.push('');
+    appendPurchaseBlock(lines, item, false);
     keyboard.push([
       { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
       { text: '✏️ Editar o que comprou', callback_data: `edit_purchase:${item.id}` },
