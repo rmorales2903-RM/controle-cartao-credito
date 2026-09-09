@@ -114,8 +114,70 @@ function brl(value: unknown) {
   return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
+function capitalize(value: unknown) {
+  const text = String(value || '').trim();
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+}
+
 function formatReport(report: any) {
   if (!report) return 'Sem dados.';
+
+  if (report.report_type === 'invoice_summary') {
+    const currentName = capitalize(report.current_month_name);
+    const nextName = capitalize(report.next_month_name);
+    const lines: string[] = [`💳 ${report.title || 'Resumo'}`, ''];
+
+    if (report.current_status === 'closed') {
+      lines.push(`🔒 Fatura de ${currentName} — fechada`);
+      lines.push(report.current_has_data ? brl(report.current_total) : 'Valor ainda não informado');
+    } else {
+      lines.push(`🟢 Fatura de ${currentName} — em aberto`);
+      lines.push(brl(report.current_total));
+    }
+
+    lines.push('');
+    lines.push(`🟢 Compras para ${nextName} — em aberto`);
+    lines.push(`${brl(report.next_total)} · ${Number(report.next_count || 0)} lançamento(s)`);
+    lines.push('');
+    lines.push(`Fechamento: dia ${report.closing_day || 5}`);
+    return lines.join('\n');
+  }
+
+  if (report.report_type === 'upcoming_invoices') {
+    const currentName = capitalize(report.current_month_name);
+    const lines: string[] = ['💳 Resumo das Faturas', ''];
+
+    if (report.current_status === 'closed') {
+      lines.push(`🔒 Fatura de ${currentName} — fechada`);
+      lines.push(Number(report.current_count || 0) > 0 ? brl(report.current_total) : 'Valor ainda não informado');
+    } else {
+      lines.push(`🟢 Fatura de ${currentName} — em aberto`);
+      lines.push(brl(report.current_total));
+    }
+
+    if (Array.isArray(report.months) && report.months.length) {
+      lines.push('');
+      const [first, ...rest] = report.months;
+      lines.push(`🟢 Compras para ${capitalize(first.month_name)} — em aberto`);
+      lines.push(`${brl(first.total)} · ${Number(first.count || 0)} lançamento(s)`);
+
+      if (rest.length) {
+        lines.push('');
+        lines.push('📅 Próximos meses');
+        for (const item of rest) {
+          lines.push(`• ${capitalize(item.month_name)}: ${brl(item.total)}`);
+        }
+      }
+    } else {
+      lines.push('');
+      lines.push('Nenhuma compra futura registrada.');
+    }
+
+    lines.push('');
+    lines.push(`Fechamento: dia ${report.closing_day || 5}`);
+    return lines.join('\n');
+  }
+
   const lines: string[] = [String(report.title || 'Relatório')];
   if (report.total !== undefined) lines.push(`Total: ${brl(report.total)}`);
   if (report.count !== undefined) lines.push(`Quantidade: ${report.count}`);
@@ -123,7 +185,11 @@ function formatReport(report: any) {
   if (Array.isArray(report.items) && report.items.length) {
     lines.push('');
     for (const item of report.items.slice(0, 10)) {
-      lines.push(`• ${item.date || ''} ${item.merchant || ''} — ${brl(item.amount)}`.trim());
+      const extra: string[] = [];
+      if (item.installments) extra.push(item.installments === 1 ? 'à vista' : `${item.installments}x`);
+      if (item.invoice_month) extra.push(`fatura ${item.invoice_month}`);
+      const suffix = extra.length ? ` (${extra.join(' · ')})` : '';
+      lines.push(`• ${item.date || ''} ${item.merchant || ''} — ${brl(item.amount)}${suffix}`.trim());
     }
   }
 
@@ -134,7 +200,7 @@ function formatReport(report: any) {
     }
   }
 
-  if ((!report.items || report.items.length === 0) && (!report.months || report.months.length === 0) && report.total === undefined) {
+  if ((!report.items || report.items.length === 0) && (!report.months || report.months.length === 0) && report.total === undefined && report.count === undefined) {
     lines.push('Nenhum registro encontrado.');
   }
 
@@ -193,7 +259,7 @@ export async function POST(req: NextRequest) {
 
       if (action === 'menu' && value) {
         const report = await getReport(chatId, value);
-        await sendTelegramMessage(chatId, formatReport(report), value === 'expenses_me' || value === 'expenses_mylena' || value === 'general' || value === 'upcoming' || value === 'purchases' || value === 'pending' ? { inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]] } : undefined);
+        await sendTelegramMessage(chatId, formatReport(report), { inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]] });
         return NextResponse.json({ ok: true });
       }
 
