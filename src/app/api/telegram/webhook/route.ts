@@ -145,6 +145,12 @@ function purchaseLabel(item: any) {
   return description ? `${merchant} — ${description}` : merchant;
 }
 
+function shortDate(value: unknown) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return match ? `${match[1]}/${match[2]}/${match[3].slice(2)}` : text;
+}
+
 function appendInvoiceItems(lines: string[], items: any[]) {
   if (!Array.isArray(items) || !items.length) return;
   for (const item of items.slice(0, 12)) {
@@ -263,8 +269,9 @@ async function showPurchases(chatId: number) {
 
   for (const item of items) {
     const description = String(item.description || '').trim();
-    lines.push(`• ${item.date} ${item.merchant} — ${brl(item.amount)}`);
-    lines.push(`  ${description || 'O que comprou: não informado'}`);
+    lines.push(`${shortDate(item.date)} - ${brl(item.amount)}`);
+    lines.push(String(item.merchant || 'Estabelecimento não informado'));
+    lines.push(description || 'O que comprou: não informado');
     lines.push('');
     keyboard.push([
       { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
