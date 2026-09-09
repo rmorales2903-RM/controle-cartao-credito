@@ -115,18 +115,9 @@ function brl(value: unknown) {
 }
 
 const monthMap: Record<string, string> = {
-  january: 'Janeiro',
-  february: 'Fevereiro',
-  march: 'Março',
-  april: 'Abril',
-  may: 'Maio',
-  june: 'Junho',
-  july: 'Julho',
-  august: 'Agosto',
-  september: 'Setembro',
-  october: 'Outubro',
-  november: 'Novembro',
-  december: 'Dezembro',
+  january: 'Janeiro', february: 'Fevereiro', march: 'Março', april: 'Abril',
+  may: 'Maio', june: 'Junho', july: 'Julho', august: 'Agosto',
+  september: 'Setembro', october: 'Outubro', november: 'Novembro', december: 'Dezembro',
 };
 
 function monthName(value: unknown) {
@@ -140,10 +131,16 @@ function installmentLabel(item: any) {
   return count <= 1 ? 'à vista' : `parcela ${number}/${count}`;
 }
 
+function purchaseLabel(item: any) {
+  const merchant = item?.merchant || 'Compra';
+  const description = String(item?.description || '').trim();
+  return description ? `${merchant} — ${description}` : merchant;
+}
+
 function appendInvoiceItems(lines: string[], items: any[]) {
   if (!Array.isArray(items) || !items.length) return;
   for (const item of items.slice(0, 12)) {
-    lines.push(`• ${item.merchant || 'Compra'} — ${brl(item.amount)} — ${installmentLabel(item)}`);
+    lines.push(`• ${purchaseLabel(item)} — ${brl(item.amount)} — ${installmentLabel(item)}`);
   }
 }
 
@@ -221,15 +218,13 @@ function formatReport(report: any) {
       if (item.installments) extra.push(item.installments === 1 ? 'à vista' : `${item.installments}x`);
       if (item.invoice_month) extra.push(`fatura ${item.invoice_month}`);
       const suffix = extra.length ? ` (${extra.join(' · ')})` : '';
-      lines.push(`• ${item.date || ''} ${item.merchant || ''} — ${brl(item.amount)}${suffix}`.trim());
+      lines.push(`• ${item.date || ''} ${purchaseLabel(item)} — ${brl(item.amount)}${suffix}`.trim());
     }
   }
 
   if (Array.isArray(report.months) && report.months.length) {
     lines.push('');
-    for (const item of report.months) {
-      lines.push(`• ${item.month}: ${brl(item.total)}`);
-    }
+    for (const item of report.months) lines.push(`• ${item.month}: ${brl(item.total)}`);
   }
 
   if ((!report.items || report.items.length === 0) && (!report.months || report.months.length === 0) && report.total === undefined && report.count === undefined) {
@@ -246,13 +241,16 @@ async function showMenu(chatId: number) {
   await sendTelegramMessage(chatId, text, isAdmin ? adminMenuKeyboard : memberMenuKeyboard);
 }
 
+async function askPurchaseDescription(chatId: number, purchaseId: string) {
+  await setState(chatId, 'purchase_description', purchaseId);
+  await sendTelegramMessage(chatId, 'O que foi comprado?\nEx.: Torneira cozinha');
+}
+
 export async function POST(req: NextRequest) {
   try {
     const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
     const received = req.headers.get('x-telegram-bot-api-secret-token');
-    if (!expected || received !== expected) {
-      return NextResponse.json({ ok: false }, { status: 401 });
-    }
+    if (!expected || received !== expected) return NextResponse.json({ ok: false }, { status: 401 });
 
     const update = await req.json();
     const message = update?.message;
@@ -262,9 +260,8 @@ export async function POST(req: NextRequest) {
 
     const text = String(message?.text || '');
     if (text === '/start' || text.startsWith('/start ')) {
-      try {
-        await showMenu(chatId);
-      } catch {
+      try { await showMenu(chatId); }
+      catch {
         await setState(chatId, 'pending_start', null);
         await sendTelegramMessage(chatId, 'Quem está usando este Telegram?', profileKeyboard);
       }
@@ -306,13 +303,9 @@ export async function POST(req: NextRequest) {
           await setState(chatId, 'merchant_edit', purchaseId);
           await sendTelegramMessage(chatId, 'Digite o nome correto do estabelecimento:');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', {
-            p_purchase_id: purchaseId,
-            p_display_name: null,
-          });
+          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', { p_purchase_id: purchaseId, p_display_name: null });
           if (error) throw error;
-          await setState(chatId, `installments:${purchaseId}`, purchaseId);
-          await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
+          await askPurchaseDescription(chatId, purchaseId);
         }
         return NextResponse.json({ ok: true });
       }
@@ -322,10 +315,7 @@ export async function POST(req: NextRequest) {
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
         const count = Number(value);
-        const { error } = await supabaseAdmin().rpc('cc_set_installments', {
-          p_purchase_id: purchaseId,
-          p_count: count,
-        });
+        const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
         if (error) throw error;
         await setState(chatId, `category:${purchaseId}`, purchaseId);
         await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
@@ -343,10 +333,7 @@ export async function POST(req: NextRequest) {
         const state = await takeState(chatId);
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
-        const { error } = await supabaseAdmin().rpc('cc_set_category', {
-          p_purchase_id: purchaseId,
-          p_category: value,
-        });
+        const { error } = await supabaseAdmin().rpc('cc_set_category', { p_purchase_id: purchaseId, p_category: value });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
         await showMenu(chatId);
@@ -372,18 +359,28 @@ export async function POST(req: NextRequest) {
           p_display_name: String(message.text).trim(),
         });
         if (error) throw error;
-        await setState(chatId, `installments:${purchaseId}`, purchaseId);
-        await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
+        await askPurchaseDescription(chatId, purchaseId);
+      } else if (state.action === 'purchase_description' && purchaseId) {
+        const description = String(message.text).trim();
+        if (!description) {
+          await setState(chatId, 'purchase_description', purchaseId);
+          await sendTelegramMessage(chatId, 'Informe o que foi comprado. Ex.: Torneira cozinha');
+        } else {
+          const { error } = await supabaseAdmin().rpc('cc_set_purchase_description', {
+            p_purchase_id: purchaseId,
+            p_description: description,
+          });
+          if (error) throw error;
+          await setState(chatId, `installments:${purchaseId}`, purchaseId);
+          await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
+        }
       } else if (state.action === 'installments_more' && purchaseId) {
         const count = Number(String(message.text).trim());
         if (!Number.isInteger(count) || count < 2 || count > 48) {
           await setState(chatId, 'installments_more', purchaseId);
           await sendTelegramMessage(chatId, 'Informe um número inteiro entre 2 e 48.');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_set_installments', {
-            p_purchase_id: purchaseId,
-            p_count: count,
-          });
+          const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
           if (error) throw error;
           await setState(chatId, `category:${purchaseId}`, purchaseId);
           await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
@@ -402,9 +399,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error(e);
-    return NextResponse.json(
-      { ok: false, error: e instanceof Error ? e.message : 'internal error' },
-      { status: 500 },
-    );
+    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'internal error' }, { status: 500 });
   }
 }
