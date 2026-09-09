@@ -110,6 +110,14 @@ async function getReport(chatId: number, view: string) {
   return data as any;
 }
 
+async function getEditablePurchases(chatId: number) {
+  const { data, error } = await supabaseAdmin().rpc('cc_recent_purchases_for_edit', {
+    p_chat_id: chatId,
+  });
+  if (error) throw error;
+  return Array.isArray(data) ? data : [];
+}
+
 function brl(value: unknown) {
   return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -241,6 +249,33 @@ async function showMenu(chatId: number) {
   await sendTelegramMessage(chatId, text, isAdmin ? adminMenuKeyboard : memberMenuKeyboard);
 }
 
+async function showPurchases(chatId: number) {
+  const items = await getEditablePurchases(chatId);
+  if (!items.length) {
+    await sendTelegramMessage(chatId, '🧾 Compras\n\nNenhuma compra registrada.', {
+      inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
+    });
+    return;
+  }
+
+  const lines: string[] = ['🧾 Compras Recentes', ''];
+  const keyboard: any[] = [];
+
+  for (const item of items) {
+    const description = String(item.description || '').trim();
+    lines.push(`• ${item.date} ${item.merchant} — ${brl(item.amount)}`);
+    lines.push(`  ${description || 'O que comprou: não informado'}`);
+    lines.push('');
+    keyboard.push([
+      { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
+      { text: '✏️ Editar o que comprou', callback_data: `edit_purchase:${item.id}` },
+    ]);
+  }
+
+  keyboard.push([{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]);
+  await sendTelegramMessage(chatId, lines.join('\n').trim(), { inline_keyboard: keyboard });
+}
+
 async function askPurchaseDescription(chatId: number, purchaseId: string) {
   await setState(chatId, 'purchase_description', purchaseId);
   await sendTelegramMessage(chatId, 'O que foi comprado?\nEx.: Torneira cozinha');
@@ -287,13 +322,31 @@ export async function POST(req: NextRequest) {
       }
 
       if (action === 'menu' && value) {
+        if (value === 'purchases') {
+          await showPurchases(chatId);
+          return NextResponse.json({ ok: true });
+        }
         const report = await getReport(chatId, value);
-        await sendTelegramMessage(chatId, formatReport(report), { inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]] });
+        await sendTelegramMessage(chatId, formatReport(report), {
+          inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
+        });
         return NextResponse.json({ ok: true });
       }
 
       if (action === 'menu_back') {
         await showMenu(chatId);
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === 'edit_establishment' && value) {
+        await setState(chatId, 'edit_establishment', value);
+        await sendTelegramMessage(chatId, 'Digite o novo nome do estabelecimento:');
+        return NextResponse.json({ ok: true });
+      }
+
+      if (action === 'edit_purchase' && value) {
+        await setState(chatId, 'edit_purchase', value);
+        await sendTelegramMessage(chatId, 'Digite o que foi comprado:');
         return NextResponse.json({ ok: true });
       }
 
@@ -303,7 +356,10 @@ export async function POST(req: NextRequest) {
           await setState(chatId, 'merchant_edit', purchaseId);
           await sendTelegramMessage(chatId, 'Digite o nome correto do estabelecimento:');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', { p_purchase_id: purchaseId, p_display_name: null });
+          const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', {
+            p_purchase_id: purchaseId,
+            p_display_name: null,
+          });
           if (error) throw error;
           await askPurchaseDescription(chatId, purchaseId);
         }
@@ -315,7 +371,10 @@ export async function POST(req: NextRequest) {
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
         const count = Number(value);
-        const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
+        const { error } = await supabaseAdmin().rpc('cc_set_installments', {
+          p_purchase_id: purchaseId,
+          p_count: count,
+        });
         if (error) throw error;
         await setState(chatId, `category:${purchaseId}`, purchaseId);
         await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
@@ -333,7 +392,10 @@ export async function POST(req: NextRequest) {
         const state = await takeState(chatId);
         const purchaseId = state?.purchase_id;
         if (!purchaseId) throw new Error('Compra não encontrada no estado do Telegram');
-        const { error } = await supabaseAdmin().rpc('cc_set_category', { p_purchase_id: purchaseId, p_category: value });
+        const { error } = await supabaseAdmin().rpc('cc_set_category', {
+          p_purchase_id: purchaseId,
+          p_category: value,
+        });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
         await showMenu(chatId);
@@ -352,35 +414,66 @@ export async function POST(req: NextRequest) {
       const state = await takeState(chatId);
       if (!state) return NextResponse.json({ ok: true });
       const purchaseId = state.purchase_id;
+      const entered = String(message.text).trim();
 
-      if (state.action === 'merchant_edit' && purchaseId) {
+      if (state.action === 'edit_establishment' && purchaseId) {
+        if (!entered) {
+          await setState(chatId, 'edit_establishment', purchaseId);
+          await sendTelegramMessage(chatId, 'Digite um nome válido para o estabelecimento:');
+        } else {
+          const { error } = await supabaseAdmin().rpc('cc_update_purchase_merchant', {
+            p_chat_id: chatId,
+            p_purchase_id: purchaseId,
+            p_display_name: entered,
+          });
+          if (error) throw error;
+          await sendTelegramMessage(chatId, '✅ Estabelecimento atualizado.');
+          await showPurchases(chatId);
+        }
+      } else if (state.action === 'edit_purchase' && purchaseId) {
+        if (!entered) {
+          await setState(chatId, 'edit_purchase', purchaseId);
+          await sendTelegramMessage(chatId, 'Digite o que foi comprado:');
+        } else {
+          const { error } = await supabaseAdmin().rpc('cc_update_purchase_description', {
+            p_chat_id: chatId,
+            p_purchase_id: purchaseId,
+            p_description: entered,
+          });
+          if (error) throw error;
+          await sendTelegramMessage(chatId, '✅ Descrição da compra atualizada.');
+          await showPurchases(chatId);
+        }
+      } else if (state.action === 'merchant_edit' && purchaseId) {
         const { error } = await supabaseAdmin().rpc('cc_confirm_merchant', {
           p_purchase_id: purchaseId,
-          p_display_name: String(message.text).trim(),
+          p_display_name: entered,
         });
         if (error) throw error;
         await askPurchaseDescription(chatId, purchaseId);
       } else if (state.action === 'purchase_description' && purchaseId) {
-        const description = String(message.text).trim();
-        if (!description) {
+        if (!entered) {
           await setState(chatId, 'purchase_description', purchaseId);
           await sendTelegramMessage(chatId, 'Informe o que foi comprado. Ex.: Torneira cozinha');
         } else {
           const { error } = await supabaseAdmin().rpc('cc_set_purchase_description', {
             p_purchase_id: purchaseId,
-            p_description: description,
+            p_description: entered,
           });
           if (error) throw error;
           await setState(chatId, `installments:${purchaseId}`, purchaseId);
           await sendTelegramMessage(chatId, 'Como foi a compra?', installmentKeyboard);
         }
       } else if (state.action === 'installments_more' && purchaseId) {
-        const count = Number(String(message.text).trim());
+        const count = Number(entered);
         if (!Number.isInteger(count) || count < 2 || count > 48) {
           await setState(chatId, 'installments_more', purchaseId);
           await sendTelegramMessage(chatId, 'Informe um número inteiro entre 2 e 48.');
         } else {
-          const { error } = await supabaseAdmin().rpc('cc_set_installments', { p_purchase_id: purchaseId, p_count: count });
+          const { error } = await supabaseAdmin().rpc('cc_set_installments', {
+            p_purchase_id: purchaseId,
+            p_count: count,
+          });
           if (error) throw error;
           await setState(chatId, `category:${purchaseId}`, purchaseId);
           await sendTelegramMessage(chatId, 'Escolha a categoria:', categoryKeyboard);
@@ -388,7 +481,7 @@ export async function POST(req: NextRequest) {
       } else if (state.action === 'category_more' && purchaseId) {
         const { error } = await supabaseAdmin().rpc('cc_set_category', {
           p_purchase_id: purchaseId,
-          p_category: String(message.text).trim().toLowerCase(),
+          p_category: entered.toLowerCase(),
         });
         if (error) throw error;
         await sendTelegramMessage(chatId, '✅ Compra confirmada.');
@@ -399,6 +492,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (e) {
     console.error(e);
-    return NextResponse.json({ ok: false, error: e instanceof Error ? e.message : 'internal error' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : 'internal error' },
+      { status: 500 },
+    );
   }
 }
