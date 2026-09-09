@@ -114,22 +114,50 @@ function brl(value: unknown) {
   return Number(value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function capitalize(value: unknown) {
+const monthMap: Record<string, string> = {
+  january: 'Janeiro',
+  february: 'Fevereiro',
+  march: 'Março',
+  april: 'Abril',
+  may: 'Maio',
+  june: 'Junho',
+  july: 'Julho',
+  august: 'Agosto',
+  september: 'Setembro',
+  october: 'Outubro',
+  november: 'Novembro',
+  december: 'Dezembro',
+};
+
+function monthName(value: unknown) {
   const text = String(value || '').trim();
-  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+  return monthMap[text.toLowerCase()] || (text ? text.charAt(0).toUpperCase() + text.slice(1) : '');
+}
+
+function installmentLabel(item: any) {
+  const count = Number(item?.installment_count || 1);
+  const number = Number(item?.installment_number || 1);
+  return count <= 1 ? 'à vista' : `parcela ${number}/${count}`;
+}
+
+function appendInvoiceItems(lines: string[], items: any[]) {
+  if (!Array.isArray(items) || !items.length) return;
+  for (const item of items.slice(0, 12)) {
+    lines.push(`• ${item.merchant || 'Compra'} — ${brl(item.amount)} — ${installmentLabel(item)}`);
+  }
 }
 
 function formatReport(report: any) {
   if (!report) return 'Sem dados.';
 
   if (report.report_type === 'invoice_summary') {
-    const currentName = capitalize(report.current_month_name);
-    const nextName = capitalize(report.next_month_name);
+    const currentName = monthName(report.current_month_name);
+    const nextName = monthName(report.next_month_name);
     const lines: string[] = [`💳 ${report.title || 'Resumo'}`, ''];
 
     if (report.current_status === 'closed') {
       lines.push(`🔒 Fatura de ${currentName} — fechada`);
-      lines.push(report.current_has_data ? brl(report.current_total) : 'Valor ainda não informado');
+      lines.push(report.current_has_data ? brl(report.current_total) : 'Fatura fechada — valor não cadastrado');
     } else {
       lines.push(`🟢 Fatura de ${currentName} — em aberto`);
       lines.push(brl(report.current_total));
@@ -137,35 +165,39 @@ function formatReport(report: any) {
 
     lines.push('');
     lines.push(`🟢 Compras para ${nextName} — em aberto`);
-    lines.push(`${brl(report.next_total)} · ${Number(report.next_count || 0)} lançamento(s)`);
+    lines.push(brl(report.next_total));
+    appendInvoiceItems(lines, report.next_items);
     lines.push('');
     lines.push(`Fechamento: dia ${report.closing_day || 5}`);
     return lines.join('\n');
   }
 
   if (report.report_type === 'upcoming_invoices') {
-    const currentName = capitalize(report.current_month_name);
+    const currentName = monthName(report.current_month_name);
     const lines: string[] = ['💳 Resumo das Faturas', ''];
 
     if (report.current_status === 'closed') {
       lines.push(`🔒 Fatura de ${currentName} — fechada`);
-      lines.push(Number(report.current_count || 0) > 0 ? brl(report.current_total) : 'Valor ainda não informado');
+      lines.push(Number(report.current_count || 0) > 0 ? brl(report.current_total) : 'Fatura fechada — valor não cadastrado');
     } else {
       lines.push(`🟢 Fatura de ${currentName} — em aberto`);
       lines.push(brl(report.current_total));
     }
 
     if (Array.isArray(report.months) && report.months.length) {
-      lines.push('');
       const [first, ...rest] = report.months;
-      lines.push(`🟢 Compras para ${capitalize(first.month_name)} — em aberto`);
-      lines.push(`${brl(first.total)} · ${Number(first.count || 0)} lançamento(s)`);
+      lines.push('');
+      lines.push(`🟢 Compras para ${monthName(first.month_name)} — em aberto`);
+      lines.push(brl(first.total));
+      appendInvoiceItems(lines, first.items);
 
       if (rest.length) {
         lines.push('');
         lines.push('📅 Próximos meses');
         for (const item of rest) {
-          lines.push(`• ${capitalize(item.month_name)}: ${brl(item.total)}`);
+          lines.push('');
+          lines.push(`${monthName(item.month_name)} — ${brl(item.total)}`);
+          appendInvoiceItems(lines, item.items);
         }
       }
     } else {
