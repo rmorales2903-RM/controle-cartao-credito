@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 
-async function telegramCall(token: string, method: string, body: Record<string, unknown>) {
+const EXPECTED_BOT_USERNAME = 'controle_cartao_rodrigo_bot';
+
+async function telegramCall(token: string, method: string, body: Record<string, unknown> = {}) {
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -25,6 +27,21 @@ export async function GET() {
 
   if (!secret) {
     return NextResponse.json({ ok: false, error: 'TELEGRAM_WEBHOOK_SECRET missing' }, { status: 500 });
+  }
+
+  const identity = await telegramCall(token, 'getMe');
+  const username = String(identity.data?.result?.username || '');
+  if (!identity.response.ok || identity.data?.ok !== true) {
+    return NextResponse.json({ ok: false, error: 'Unable to validate Telegram bot identity' }, { status: 502 });
+  }
+
+  if (username.toLowerCase() !== EXPECTED_BOT_USERNAME.toLowerCase()) {
+    return NextResponse.json({
+      ok: false,
+      error: 'Wrong Telegram bot configured for credit card project',
+      username,
+      expected: EXPECTED_BOT_USERNAME,
+    }, { status: 409 });
   }
 
   const webhookUrl = `${baseUrl}/api/telegram/webhook`;
@@ -54,6 +71,7 @@ export async function GET() {
 
   return NextResponse.json({
     ok,
+    username,
     webhookUrl,
     telegram: {
       webhook: webhook.data,
