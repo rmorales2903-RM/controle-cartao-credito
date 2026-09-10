@@ -7,7 +7,7 @@ export type ParsedCaixaSms = {
 };
 
 export function parseCaixaSms(raw: string): ParsedCaixaSms {
-  const re = /Compra aprovada em\s+(.+?),\s*R\$\s*([\d.]+,\d{2}),\s*(\d{2})\/(\d{2})\s+as\s+(\d{2}):(\d{2})\.\s*([A-Z]+)\s+final\s+(\d{4})/i;
+  const re = /Compra aprovada em\s+(.+?),\s*R\$\s*([\d.]+,\d{2}),\s*(\d{2})\/(\d{2})\s+as\s+(\d{2}):(\d{2})\.\s*([A-Z]+)(?:\s+VIRTUAL)?\s+final\s+(\d{4})/i;
   const m = raw.match(re);
   if (!m) throw new Error('SMS CAIXA não reconhecido');
 
