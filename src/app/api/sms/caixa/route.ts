@@ -72,35 +72,39 @@ export async function POST(req: NextRequest) {
     if (!row) throw new Error('No ingest response');
 
     if (!row.is_duplicate) {
-      const recipients = new Set<number>();
-
-      // O titular recebe a propria compra.
       const ownerChatId = Number(row.telegram_chat_id || 0);
-      if (ownerChatId) recipients.add(ownerChatId);
+      const suggested = row.merchant_display || parsed.merchantOriginal;
 
-      // Rodrigo/admin recebe todas as compras. Usamos RPC publica controlada para
-      // evitar dependencia de exposicao direta do schema cartao_credito no PostgREST.
+      // Somente quem fez a compra recebe o fluxo interativo para preencher os dados.
+      if (ownerChatId) {
+        const ownerMessage =
+          `Compra de R$ ${parsed.amount.toFixed(2).replace('.', ',')}\n` +
+          `Nome recebido: ${parsed.merchantOriginal}\n\n` +
+          'Qual nome deve aparecer no relatório?';
+        const ownerKeyboard = {
+          inline_keyboard: [[
+            { text: `✅ ${suggested}`, callback_data: `merchant_ok:${row.purchase_id}` },
+            { text: '✏️ Corrigir nome', callback_data: `merchant_edit:${row.purchase_id}` },
+          ]],
+        };
+        await sendTelegramMessage(ownerChatId, ownerMessage, ownerKeyboard);
+      }
+
+      // Rodrigo/admin recebe aviso de todas as compras, mas sem assumir o preenchimento
+      // quando a compra pertence a outra pessoa.
       const { data: admins, error: adminsError } = await supabase.rpc('cc_admin_telegram_recipients');
       if (adminsError) throw adminsError;
       for (const admin of Array.isArray(admins) ? admins : []) {
         const adminChatId = Number(admin?.telegram_chat_id || 0);
-        if (adminChatId) recipients.add(adminChatId);
-      }
+        if (!adminChatId || adminChatId === ownerChatId) continue;
 
-      const suggested = row.merchant_display || parsed.merchantOriginal;
-      const message =
-        `Compra de R$ ${parsed.amount.toFixed(2).replace('.', ',')}\n` +
-        `Nome recebido: ${parsed.merchantOriginal}\n\n` +
-        'Qual nome deve aparecer no relatório?';
-      const keyboard = {
-        inline_keyboard: [[
-          { text: `✅ ${suggested}`, callback_data: `merchant_ok:${row.purchase_id}` },
-          { text: '✏️ Corrigir nome', callback_data: `merchant_edit:${row.purchase_id}` },
-        ]],
-      };
-
-      for (const chatId of recipients) {
-        await sendTelegramMessage(chatId, message, keyboard);
+        const adminMessage =
+          `🔔 Nova compra no cartão\n` +
+          `Titular: ${row.owner_name || 'Mylena'}\n` +
+          `Valor: R$ ${parsed.amount.toFixed(2).replace('.', ',')}\n` +
+          `Estabelecimento: ${parsed.merchantOriginal}\n` +
+          `Final do cartão: ${parsed.last4}`;
+        await sendTelegramMessage(adminChatId, adminMessage);
       }
     }
 
