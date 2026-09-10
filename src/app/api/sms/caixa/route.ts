@@ -72,26 +72,20 @@ export async function POST(req: NextRequest) {
     if (!row) throw new Error('No ingest response');
 
     if (!row.is_duplicate) {
-      // Regra de notificacao:
-      // - Rodrigo (admin) recebe todas as compras.
-      // - O titular do cartao recebe as proprias compras.
-      // Assim, compras de Rodrigo ficam somente com Rodrigo; compras de Mylena chegam aos dois.
       const recipients = new Set<number>();
+
+      // O titular recebe a propria compra.
       const ownerChatId = Number(row.telegram_chat_id || 0);
       if (ownerChatId) recipients.add(ownerChatId);
 
-      const { data: adminUser, error: adminError } = await supabase
-        .schema('cartao_credito')
-        .from('users')
-        .select('telegram_chat_id')
-        .eq('role', 'admin')
-        .not('telegram_chat_id', 'is', null)
-        .limit(1)
-        .maybeSingle();
-
-      if (adminError) throw adminError;
-      const adminChatId = Number(adminUser?.telegram_chat_id || 0);
-      if (adminChatId) recipients.add(adminChatId);
+      // Rodrigo/admin recebe todas as compras. Usamos RPC publica controlada para
+      // evitar dependencia de exposicao direta do schema cartao_credito no PostgREST.
+      const { data: admins, error: adminsError } = await supabase.rpc('cc_admin_telegram_recipients');
+      if (adminsError) throw adminsError;
+      for (const admin of Array.isArray(admins) ? admins : []) {
+        const adminChatId = Number(admin?.telegram_chat_id || 0);
+        if (adminChatId) recipients.add(adminChatId);
+      }
 
       const suggested = row.merchant_display || parsed.merchantOriginal;
       const message =
