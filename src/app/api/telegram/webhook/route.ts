@@ -262,19 +262,22 @@ async function showPurchases(chatId: number) {
     return;
   }
 
-  const lines: string[] = ['🧾 Compras Recentes', ''];
-  const keyboard: any[] = [];
+  await sendTelegramMessage(chatId, '🧾 Compras Recentes');
 
   for (const item of items) {
+    const lines: string[] = [];
     appendPurchaseBlock(lines, item, false);
-    keyboard.push([
-      { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
-      { text: '✏️ Editar o que comprou', callback_data: `edit_purchase:${item.id}` },
-    ]);
+    await sendTelegramMessage(chatId, lines.join('\n').trim(), {
+      inline_keyboard: [[
+        { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
+        { text: '✏️ Editar o que comprou', callback_data: `edit_purchase:${item.id}` },
+      ]],
+    });
   }
 
-  keyboard.push([{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]);
-  await sendTelegramMessage(chatId, lines.join('\n').trim(), { inline_keyboard: keyboard });
+  await sendTelegramMessage(chatId, 'Fim das compras recentes.', {
+    inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
+  });
 }
 
 async function askPurchaseDescription(chatId: number, purchaseId: string) {
