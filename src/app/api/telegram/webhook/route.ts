@@ -160,7 +160,7 @@ function appendPurchaseBlock(lines: string[], item: any, showInstallment = false
 
 function appendInvoiceItems(lines: string[], items: any[]) {
   if (!Array.isArray(items) || !items.length) return;
-  for (const item of items.slice(0, 12)) appendPurchaseBlock(lines, item, true);
+  for (const item of items) appendPurchaseBlock(lines, item, true);
 }
 
 function formatReport(report: any) {
@@ -231,7 +231,7 @@ function formatReport(report: any) {
 
   if (Array.isArray(report.items) && report.items.length) {
     lines.push('');
-    for (const item of report.items.slice(0, 10)) appendPurchaseBlock(lines, item, Boolean(item.installments));
+    for (const item of report.items) appendPurchaseBlock(lines, item, Boolean(item.installments));
   }
 
   if (Array.isArray(report.months) && report.months.length) {
