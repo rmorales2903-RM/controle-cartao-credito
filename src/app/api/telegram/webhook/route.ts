@@ -253,31 +253,60 @@ async function showMenu(chatId: number) {
   await sendTelegramMessage(chatId, text, isAdmin ? adminMenuKeyboard : memberMenuKeyboard);
 }
 
-async function showPurchases(chatId: number) {
-  const items = await getEditablePurchases(chatId);
+const purchasesMenuKeyboard = {
+  inline_keyboard: [
+    [{ text: '🔎 Buscar compra', callback_data: 'purchases:search' }],
+    [
+      { text: '📅 Compras de hoje', callback_data: 'purchases:today' },
+      { text: '🕐 Últimas 10', callback_data: 'purchases:recent' },
+    ],
+    [{ text: '⚠️ Pendências', callback_data: 'menu:pending' }],
+    [{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }],
+  ],
+};
+
+function normalizeSearch(value: unknown) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function purchaseSearchText(item: any) {
+  return normalizeSearch([
+    item?.date,
+    item?.merchant,
+    item?.description,
+    item?.amount,
+    Number(item?.amount || 0).toFixed(2).replace('.', ','),
+  ].join(' '));
+}
+
+async function showPurchaseResults(chatId: number, items: any[], title: string) {
   if (!items.length) {
-    await sendTelegramMessage(chatId, '🧾 Compras\n\nNenhuma compra registrada.', {
-      inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
-    });
+    await sendTelegramMessage(chatId, `${title}\n\nNenhuma compra encontrada.`, purchasesMenuKeyboard);
     return;
   }
 
-  await sendTelegramMessage(chatId, '🧾 Compras Recentes');
+  await sendTelegramMessage(chatId, `${title}\n${items.length} compra(s) encontrada(s).`);
 
   for (const item of items) {
     const lines: string[] = [];
     appendPurchaseBlock(lines, item, false);
     await sendTelegramMessage(chatId, lines.join('\n').trim(), {
       inline_keyboard: [[
-        { text: '✏️ Editar estabelecimento', callback_data: `edit_establishment:${item.id}` },
-        { text: '✏️ Editar o que comprou', callback_data: `edit_purchase:${item.id}` },
+        { text: '✏️ Estabelecimento', callback_data: `edit_establishment:${item.id}` },
+        { text: '✏️ Descrição', callback_data: `edit_purchase:${item.id}` },
       ]],
     });
   }
 
-  await sendTelegramMessage(chatId, 'Fim das compras recentes.', {
-    inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
-  });
+  await sendTelegramMessage(chatId, 'Escolha outra opção ou volte ao menu.', purchasesMenuKeyboard);
+}
+
+async function showPurchases(chatId: number) {
+  await sendTelegramMessage(
+    chatId,
+    '🧾 Localizar compra\n\nEscolha como deseja encontrar a compra que quer alterar:',
+    purchasesMenuKeyboard,
+  );
 }
 
 async function askPurchaseDescription(chatId: number, purchaseId: string) {
@@ -335,6 +364,37 @@ export async function POST(req: NextRequest) {
           inline_keyboard: [[{ text: '⬅️ Menu', callback_data: 'menu_back:menu' }]],
         });
         return NextResponse.json({ ok: true });
+      }
+
+      if (action === 'purchases' && value) {
+        const items = await getEditablePurchases(chatId);
+
+        if (value === 'search') {
+          await setState(chatId, 'search_purchase', null);
+          await sendTelegramMessage(chatId, '🔎 Digite algo sobre a compra.\n\nEx.: Apple, 99,90, 16/09, posto ou uma palavra da descrição.');
+          return NextResponse.json({ ok: true });
+        }
+
+        if (value === 'recent') {
+          await showPurchaseResults(chatId, items.slice(0, 10), '🕐 Últimas 10 compras');
+          return NextResponse.json({ ok: true });
+        }
+
+        if (value === 'today') {
+          const today = new Intl.DateTimeFormat('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+          }).format(new Date());
+          const todayShort = today.slice(0, 5);
+          const matches = items.filter((item: any) => {
+            const date = String(item?.date || '');
+            return date === today || date.startsWith(todayShort);
+          });
+          await showPurchaseResults(chatId, matches, '📅 Compras de hoje');
+          return NextResponse.json({ ok: true });
+        }
       }
 
       if (action === 'menu_back') {
@@ -420,7 +480,21 @@ export async function POST(req: NextRequest) {
       const purchaseId = state.purchase_id;
       const entered = String(message.text).trim();
 
-      if (state.action === 'edit_establishment' && purchaseId) {
+      if (state.action === 'search_purchase') {
+        const query = normalizeSearch(entered);
+        if (!query) {
+          await setState(chatId, 'search_purchase', null);
+          await sendTelegramMessage(chatId, 'Digite algo para localizar a compra.');
+        } else {
+          const items = await getEditablePurchases(chatId);
+          const terms = query.split(/\s+/).filter(Boolean);
+          const matches = items.filter((item: any) => {
+            const haystack = purchaseSearchText(item);
+            return terms.every((term) => haystack.includes(term));
+          }).slice(0, 20);
+          await showPurchaseResults(chatId, matches, `🔎 Resultado para “${entered}”`);
+        }
+      } else if (state.action === 'edit_establishment' && purchaseId) {
         if (!entered) {
           await setState(chatId, 'edit_establishment', purchaseId);
           await sendTelegramMessage(chatId, 'Digite um nome válido para o estabelecimento:');
